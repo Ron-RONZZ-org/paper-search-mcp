@@ -215,6 +215,8 @@ def test_jwks_rotation_cache_and_outage_fail_closed(keys):
             return httpx.Response(200, json=state["keys"])
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
             verifier = ResourceJWTVerifier(configuration(), http_client=client)
+            # fastmcp throttles JWKS refreshes and clocks the cache with monotonic().
+            verifier._jwks_refresh_interval = 0
             valid = token(keys)
             verified = await verifier.verify_token(valid)
             assert verified.subject == "alice"
@@ -227,7 +229,7 @@ def test_jwks_rotation_cache_and_outage_fail_closed(keys):
             assert len(calls) == 2
             assert await verifier.verify_token(valid) is None
             state["failure"] = True
-            verifier._jwks_cache_time = 0
+            verifier._jwks_cache_time = -1e9
             assert await verifier.verify_token(rotated) is None
     asyncio.run(run())
 
@@ -431,10 +433,12 @@ def test_jwks_without_token_kid_requires_one_key_and_past_nbf_is_allowed(keys):
         current = {"body": jwks(keys)}
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=current["body"]))) as client:
             verifier = ResourceJWTVerifier(configuration(), http_client=client)
+            # See the rotation test: allow an immediate refresh.
+            verifier._jwks_refresh_interval = 0
             credential = token(keys, headers={"kid": None}, changes={"nbf": int(time.time()) - 10})
             assert await verifier.verify_token(credential)
             current["body"] = {"keys": [*jwks(keys)["keys"], *jwks(keys, 1, "key-2")["keys"]]}
-            verifier._jwks_cache_time = 0
+            verifier._jwks_cache_time = -1e9
             assert await verifier.verify_token(credential) is None
     asyncio.run(run())
 
