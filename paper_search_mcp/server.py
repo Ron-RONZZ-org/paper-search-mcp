@@ -18,6 +18,7 @@ from urllib.parse import unquote
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from .academic_platforms.arxiv import ArxivSearcher
 from .academic_platforms.base_search import BASESearcher
@@ -2038,6 +2039,35 @@ def _valid_http_path(raw: str) -> str:
     return path
 
 
+def _configure_transport_security() -> None:
+    """Widen FastMCP's DNS-rebinding allowlist for a service hostname.
+
+    FastMCP auto-enables DNS-rebinding protection with a localhost-only host
+    list when the server is constructed (its host defaults to 127.0.0.1).
+    Setting the host later does not widen that list, so a client on a
+    container network sending ``Host: <service>:<port>`` gets HTTP 421.
+    PAPER_SEARCH_MCP_ALLOWED_HOSTS / ALLOWED_ORIGINS add the operator's
+    aliases as comma-separated lists.
+    """
+    hosts = [
+        host.strip()
+        for host in os.getenv("PAPER_SEARCH_MCP_ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    ]
+    if not hosts:
+        return
+    origins = [
+        origin.strip()
+        for origin in os.getenv("PAPER_SEARCH_MCP_ALLOWED_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=origins,
+    )
+
+
 def _build_server_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Paper Search MCP server")
     parser.add_argument(
@@ -2088,6 +2118,8 @@ def main(argv: list[str] | None = None) -> None:
         ).start()
         mcp.run(transport="stdio")
         return
+
+    _configure_transport_security()
 
     from .http_auth import AuthConfigurationError, load_http_auth_config, run_protected_http
 
