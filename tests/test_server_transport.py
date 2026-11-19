@@ -164,5 +164,28 @@ class TestServerTransport(unittest.TestCase):
         exit_process.assert_called_once_with(0)
 
 
+def test_allowed_hosts_env_widens_transport_security(monkeypatch):
+    monkeypatch.setenv("PAPER_SEARCH_MCP_ALLOWED_HOSTS", "paper-search:8000, paper-search")
+    monkeypatch.setenv("PAPER_SEARCH_MCP_ALLOWED_ORIGINS", "http://paper-search:8000")
+    monkeypatch.setattr(server.mcp.settings, "transport_security", None)
+
+    server._configure_transport_security()
+
+    security = server.mcp.settings.transport_security
+    assert security is not None
+    assert security.enable_dns_rebinding_protection is True
+    assert security.allowed_hosts == ["paper-search:8000", "paper-search"]
+    assert security.allowed_origins == ["http://paper-search:8000"]
+
+
+def test_allowed_hosts_env_is_optional(monkeypatch):
+    monkeypatch.delenv("PAPER_SEARCH_MCP_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setattr(server.mcp.settings, "transport_security", None)
+
+    server._configure_transport_security()
+
+    assert server.mcp.settings.transport_security is None
+
+
 if __name__ == "__main__":
     unittest.main()

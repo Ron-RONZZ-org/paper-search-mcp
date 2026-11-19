@@ -14,6 +14,11 @@ This repository is the ronzz.ORG fork of
   The per-call `scihub_base_url` argument still overrides it.
 - `.github/workflows/image.yml` builds and publishes the arm64 image and runs
   two boot smokes (tool inventory, streamable-http startup).
+- `PAPER_SEARCH_MCP_ALLOWED_HOSTS` / `PAPER_SEARCH_MCP_ALLOWED_ORIGINS`
+  (comma-separated) widen FastMCP's DNS-rebinding allowlist. FastMCP pins a
+  localhost-only list when the server object is constructed (its default host
+  is `127.0.0.1`), so setting `--host 0.0.0.0` later is not enough: a client
+  on a container network sending `Host: paper-search:8000` gets HTTP 421.
 
 ## Updating from upstream
 
