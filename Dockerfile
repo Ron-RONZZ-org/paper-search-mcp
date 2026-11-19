@@ -14,6 +14,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin/paper-search-mcp /usr/local/bin/paper-search-mcp
+COPY --from=builder /usr/local/bin/paper-search /usr/local/bin/paper-search
 
 # Environment variables (override at runtime with -e)
 ENV PAPER_SEARCH_MCP_UNPAYWALL_EMAIL=""
