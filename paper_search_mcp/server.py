@@ -1144,7 +1144,7 @@ async def download_crossref(paper_id: str, save_path: str = "./downloads") -> st
 async def download_scihub(
     identifier: str,
     save_path: str = "./downloads",
-    base_url: str = "https://sci-hub.se",
+    base_url: str = "https://sci-hub.st",
 ) -> str:
     """Download paper PDF via Sci-Hub (optional fallback connector).
 
@@ -1170,7 +1170,7 @@ async def download_with_fallback(
     title: str = "",
     save_path: str = "./downloads",
     use_scihub: bool = False,
-    scihub_base_url: str = "https://sci-hub.se",
+    scihub_base_url: str = "https://sci-hub.st",
 ) -> str:
     """Try source-native download, OA repositories, Unpaywall, then optional Sci-Hub.
 

@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 class SciHubFetcher:
     """Simple Sci-Hub PDF downloader."""
 
-    def __init__(self, base_url: str = "https://sci-hub.se", output_dir: str = "./downloads"):
+    def __init__(self, base_url: str = "https://sci-hub.st", output_dir: str = "./downloads"):
         """Initialize with Sci-Hub URL and output directory."""
         self.base_url = base_url.rstrip("/")
         self.output_dir = Path(output_dir)
