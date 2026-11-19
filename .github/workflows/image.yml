@@ -1,0 +1,77 @@
+name: Image (arm64)
+
+# Builds the linux/arm64 container used by llm.ronzz.org and publishes it to
+# ghcr.io/ron-ronzz-org/paper-search-mcp. Tag = sha-<7>. The fork's source of
+# truth is forgejo.ronzz.org/ronzz-org/paper-search-mcp; this GitHub repo is
+# the mirror that runs CI.
+
+on:
+  push:
+    branches: [main, ronzz/deploy]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tag
+        id: tag
+        run: echo "value=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push linux/arm64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/ron-ronzz-org/paper-search-mcp:${{ steps.tag.outputs.value }}
+
+      - name: Smoke — tool inventory
+        run: |
+          docker run --rm --platform linux/arm64 \
+            "ghcr.io/ron-ronzz-org/paper-search-mcp:${{ steps.tag.outputs.value }}" \
+            paper-search tool --list > /tmp/tools.json
+          python3 - <<'PY'
+          import json
+          tools = json.load(open("/tmp/tools.json"))["tools"]
+          names = {tool["name"] for tool in tools}
+          print(f"{len(tools)} tools")
+          for required in ("search_papers", "download_with_fallback", "download_scihub"):
+              assert required in names, (required, sorted(names))
+          PY
+
+      - name: Smoke — streamable-http boot
+        run: |
+          docker run -d --name ps-smoke --platform linux/arm64 \
+            "ghcr.io/ron-ronzz-org/paper-search-mcp:${{ steps.tag.outputs.value }}" \
+            paper-search-mcp --transport streamable-http \
+              --host 127.0.0.1 --port 8000 --path /mcp
+          ok=0
+          for i in $(seq 1 20); do
+            if docker logs ps-smoke 2>&1 | grep -q "serving streamable-http"; then ok=1; break; fi
+            sleep 1
+          done
+          docker logs ps-smoke 2>&1 | tail -5
+          docker rm -f ps-smoke
+          test "$ok" = "1"
