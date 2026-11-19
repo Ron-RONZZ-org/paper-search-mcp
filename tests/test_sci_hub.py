@@ -11,7 +11,7 @@ def check_sci_hub_accessible():
     """Check if Sci-Hub is accessible"""
     try:
         # Test with a simple request to see if sci-hub responds
-        response = requests.get("https://sci-hub.st", timeout=10)
+        response = requests.get("https://sci-hub.ru", timeout=10)
         return response.status_code == 200
     except:
         return False
@@ -36,7 +36,7 @@ class TestSciHubFetcher(unittest.TestCase):
 
     def test_init(self):
         """Test initialization of SciHubFetcher"""
-        self.assertEqual(self.fetcher.base_url, "https://sci-hub.st")
+        self.assertEqual(self.fetcher.base_url, "https://sci-hub.ru")
         self.assertTrue(os.path.exists(self.test_dir))
         self.assertIsNotNone(self.fetcher.session)
 

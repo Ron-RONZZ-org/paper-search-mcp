@@ -52,6 +52,12 @@ logger = logging.getLogger(__name__)
 GOOGLE_SCHOLAR_TOOL_TIMEOUT_SECONDS = 20.0
 SEARCH_PAPERS_SOURCE_TIMEOUT_SECONDS = 45.0
 SEARCH_EXECUTOR_MAX_WORKERS = 32
+# Tried in order. Override with PAPER_SEARCH_MCP_SCIHUB_MIRRORS (comma-separated).
+DEFAULT_SCIHUB_MIRRORS = (
+    "https://sci-hub.ru",
+    "https://sci-hub.st",
+    "https://sci-hub.se",
+)
 
 
 class SearchExecutorSaturatedError(RuntimeError):
@@ -1141,26 +1147,92 @@ async def download_crossref(paper_id: str, save_path: str = "./downloads") -> st
         return str(e)
 
 
+def _scihub_mirrors(preferred: str = "") -> List[str]:
+    """Mirror list, preferred first, then the env override or the built-in list."""
+    configured = [
+        item.strip()
+        for item in get_env("SCIHUB_MIRRORS", "").split(",")
+        if item.strip()
+    ]
+    candidates = (
+        [preferred.strip()] if preferred.strip() else []
+    ) + (configured or list(DEFAULT_SCIHUB_MIRRORS))
+    mirrors: List[str] = []
+    seen = set()
+    for mirror in candidates:
+        normalized = mirror.rstrip("/")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            mirrors.append(normalized)
+    return mirrors
+
+
+def _try_scihub_mirrors(
+    identifier: str,
+    save_path: str,
+    preferred: str = "",
+    expected_title: str = "",
+    expected_doi: str = "",
+) -> tuple[str, List[str]]:
+    """Try each Sci-Hub mirror in order; return (path, per-mirror errors).
+
+    A PDF that does not match the expected title/DOI is deleted and the next
+    mirror is tried, so a mirror serving the wrong paper cannot stop the chain.
+    """
+    errors: List[str] = []
+    for mirror in _scihub_mirrors(preferred):
+        try:
+            fetcher = SciHubFetcher(base_url=mirror, output_dir=save_path)
+            result = fetcher.download_pdf(identifier)
+        except Exception as exc:
+            errors.append(f"{mirror}: {exc}")
+            logger.warning("Sci-Hub mirror %s failed for %s: %s", mirror, identifier, exc)
+            continue
+        if not result or not os.path.isfile(result):
+            errors.append(f"{mirror}: no PDF")
+            logger.warning("Sci-Hub mirror %s returned no PDF for %s", mirror, identifier)
+            continue
+        if (expected_title or expected_doi) and not _pdf_matches_expected(
+            result, expected_title, expected_doi
+        ):
+            errors.append(f"{mirror}: downloaded PDF did not match the requested paper")
+            logger.warning(
+                "Sci-Hub mirror %s returned a mismatched PDF for %s", mirror, identifier
+            )
+            try:
+                os.remove(result)
+            except OSError as exc:
+                logger.warning("Could not remove mismatched Sci-Hub download %s: %s", result, exc)
+            continue
+        return result, errors
+    return "", errors
+
+
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True})
 async def download_scihub(
     identifier: str,
     save_path: str = "./downloads",
-    base_url: str = "https://sci-hub.st",
+    base_url: str = "",
 ) -> str:
     """Download paper PDF via Sci-Hub (optional fallback connector).
 
     Args:
         identifier: DOI, title, PMID, or paper URL.
         save_path: Directory to save the PDF.
-        base_url: Sci-Hub mirror URL.
+        base_url: Optional preferred mirror; the server tries it first, then its
+            configured list (`PAPER_SEARCH_MCP_SCIHUB_MIRRORS` or the built-ins).
     Returns:
-        Downloaded PDF path on success; error message on failure.
+        Downloaded PDF path on success; error message listing every mirror tried
+        on failure.
     """
-    fetcher = SciHubFetcher(base_url=base_url, output_dir=save_path)
-    result = await asyncio.to_thread(fetcher.download_pdf, identifier)
+    result, errors = await asyncio.to_thread(
+        _try_scihub_mirrors, identifier, save_path, base_url
+    )
     if result:
         return result
-    return "Sci-Hub download failed. Try DOI first, then title, or change mirror URL."
+    return "Sci-Hub download failed on every mirror. Details: " + " | ".join(
+        errors or ["no mirror configured"]
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True})
@@ -1171,7 +1243,7 @@ async def download_with_fallback(
     title: str = "",
     save_path: str = "./downloads",
     use_scihub: bool = False,
-    scihub_base_url: str = "https://sci-hub.st",
+    scihub_base_url: str = "",
 ) -> str:
     """Try source-native download, OA repositories, Unpaywall, then optional Sci-Hub.
 
@@ -1182,7 +1254,8 @@ async def download_with_fallback(
         title: Optional title used for repository/Sci-Hub fallback when DOI is unavailable.
         save_path: Directory to save downloaded files.
         use_scihub: Whether to fallback to Sci-Hub after OA attempts fail. Disabled by default.
-        scihub_base_url: Sci-Hub mirror URL for fallback.
+        scihub_base_url: Optional preferred Sci-Hub mirror; the configured
+            mirror list is tried after it.
     Returns:
         Download path on success or explanatory error message.
     """
@@ -1254,29 +1327,17 @@ async def download_with_fallback(
         return "Download failed after OA fallback chain. Details: " + " | ".join(attempt_errors)
 
     fallback_identifier = (doi or "").strip() or (title or "").strip() or paper_id
-    fetcher = SciHubFetcher(base_url=scihub_base_url, output_dir=save_path)
-    fallback_result = await asyncio.to_thread(fetcher.download_pdf, fallback_identifier)
-    if fallback_result and os.path.isfile(fallback_result):
-        verified = await asyncio.to_thread(
-            _pdf_matches_expected,
-            fallback_result,
-            title,
-            doi,
-        )
-        if verified:
-            return fallback_result
-
-        attempt_errors.append(
-            "scihub: downloaded PDF content did not match the requested paper"
-        )
-        try:
-            os.remove(fallback_result)
-        except OSError as exc:
-            logger.warning(
-                "Could not remove unverified Sci-Hub download %s: %s",
-                fallback_result,
-                exc,
-            )
+    fallback_result, scihub_errors = await asyncio.to_thread(
+        _try_scihub_mirrors,
+        fallback_identifier,
+        save_path,
+        scihub_base_url,
+        title,
+        doi,
+    )
+    if fallback_result:
+        return fallback_result
+    attempt_errors.extend(f"scihub: {error}" for error in scihub_errors)
 
     return "Download failed after OA fallback chain and Sci-Hub fallback. Details: " + " | ".join(attempt_errors)
 
